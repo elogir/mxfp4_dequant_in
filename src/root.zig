@@ -7,10 +7,30 @@ const TensorInfo = struct {
     shape: [4]u32,
     shape_len: usize,
     data_offsets: [2]u64,
-    // Added fields
     is_mxfp4_blocks: bool = false,
     is_mxfp4_scales: bool = false,
     base_name: []const u8,
+
+    fn init(allocator: std.mem.Allocator, name: []const u8, tensor_obj: json.ObjectMap) !TensorInfo {
+        const dtype = tensor_obj.get("dtype").?.string;
+        const shape_result = parseShape(tensor_obj.get("shape").?.array);
+        const data_offsets = parseDataOffsets(tensor_obj.get("data_offsets").?.array);
+
+        const is_blocks = isMxfp4Blocks(name);
+        const is_scales = isMxfp4Scales(name);
+        const base_name = try getBaseName(allocator, name);
+
+        return TensorInfo{
+            .name = name,
+            .dtype = dtype,
+            .shape = shape_result.shape,
+            .shape_len = shape_result.len,
+            .data_offsets = data_offsets,
+            .is_mxfp4_blocks = is_blocks,
+            .is_mxfp4_scales = is_scales,
+            .base_name = base_name,
+        };
+    }
 
     fn size(self: TensorInfo) u64 {
         return self.data_offsets[1] - self.data_offsets[0];
@@ -75,27 +95,6 @@ fn parseDataOffsets(offsets_array: json.Array) [2]u64 {
     };
 }
 
-fn parseTensorInfo(allocator: std.mem.Allocator, name: []const u8, tensor_obj: json.ObjectMap) !TensorInfo {
-    const dtype = tensor_obj.get("dtype").?.string;
-    const shape_result = parseShape(tensor_obj.get("shape").?.array);
-    const data_offsets = parseDataOffsets(tensor_obj.get("data_offsets").?.array);
-
-    const is_blocks = isMxfp4Blocks(name);
-    const is_scales = isMxfp4Scales(name);
-    const base_name = try getBaseName(allocator, name);
-
-    return TensorInfo{
-        .name = name,
-        .dtype = dtype,
-        .shape = shape_result.shape,
-        .shape_len = shape_result.len,
-        .data_offsets = data_offsets,
-        .is_mxfp4_blocks = is_blocks,
-        .is_mxfp4_scales = is_scales,
-        .base_name = base_name,
-    };
-}
-
 fn loadTensorsFromHeader(allocator: std.mem.Allocator, parsed_header: *const json.Value) ![]TensorInfo {
     var tensors: std.ArrayList(TensorInfo) = .empty;
 
@@ -105,7 +104,7 @@ fn loadTensorsFromHeader(allocator: std.mem.Allocator, parsed_header: *const jso
         const tensor_name = entry.key_ptr.*;
         if (std.mem.eql(u8, tensor_name, "__metadata__")) continue;
 
-        const tensor_info = try parseTensorInfo(allocator, tensor_name, entry.value_ptr.object);
+        const tensor_info = try TensorInfo.init(allocator, tensor_name, entry.value_ptr.object);
         try tensors.append(allocator, tensor_info);
     }
 
@@ -279,7 +278,6 @@ fn parseHeader(tensor_reader: *std.Io.Reader) !void {
     const arena = header_arena.allocator();
 
     const header_data = try readHeaderData(arena, tensor_reader);
-
     const parsed = try json.parseFromSliceLeaky(json.Value, arena, header_data, .{});
 
     const tensors = try loadTensorsFromHeader(arena, &parsed);
@@ -287,7 +285,8 @@ fn parseHeader(tensor_reader: *std.Io.Reader) !void {
 
     var new_header: json.ObjectMap = .init(arena);
     try transformHeader(arena, tensors, &new_header);
-    try writeHeaderToFile(new_header, "NEW_HEADER.json");
+
+    try writeHeaderToFile(new_header, "NEW_HEADER.json"); // TEMP CALL
 }
 
 pub fn dequant_safetensors(allocator: std.mem.Allocator, tensor_reader: *std.Io.Reader) !void {

@@ -17,13 +17,10 @@ pub fn main() !void {
 
     const safetensors_path = args[1];
     const safetensors_file = try std.fs.cwd().openFile(safetensors_path, .{});
+    defer safetensors_file.close();
+
     var safetensors_buf: [4096]u8 = undefined;
     var safetensors_reader = safetensors_file.reader(&safetensors_buf);
 
-    mxfp4Loader.dequant_tensor(allocator, &safetensors_reader.interface) catch |err| {
-        std.debug.print("Error: {}\n", .{err});
-        return err;
-    };
-
-    std.debug.print("Success!\n", .{});
+    try mxfp4Loader.dequant_safetensors(allocator, &safetensors_reader.interface);
 }

@@ -56,25 +56,6 @@ fn sortTensorFn(_: void, lhs: TensorInfo, rhs: TensorInfo) bool {
     return lhs.data_offsets[0] < rhs.data_offsets[0];
 }
 
-fn deinitJsonValue(allocator: std.mem.Allocator, value: *json.Value) void {
-    switch (value.*) {
-        .object => |*obj| {
-            var iter = obj.iterator();
-            while (iter.next()) |entry| {
-                deinitJsonValue(allocator, entry.value_ptr);
-            }
-            obj.deinit();
-        },
-        .array => |*arr| {
-            for (arr.items) |*item| {
-                deinitJsonValue(allocator, item);
-            }
-            arr.deinit();
-        },
-        else => {},
-    }
-}
-
 fn parseShape(shape_array: json.Array) struct { shape: [4]u32, len: usize } {
     var shape: [4]u32 = undefined;
     var len: usize = 0;
@@ -115,10 +96,10 @@ fn parseTensorInfo(allocator: std.mem.Allocator, name: []const u8, tensor_obj: j
     };
 }
 
-fn loadTensorsFromHeader(allocator: std.mem.Allocator, parsed_header: *const json.Parsed(json.Value)) ![]TensorInfo {
+fn loadTensorsFromHeader(allocator: std.mem.Allocator, parsed_header: *const json.Value) ![]TensorInfo {
     var tensors: std.ArrayList(TensorInfo) = .empty;
 
-    const header = parsed_header.value.object;
+    const header = parsed_header.object;
     var iter = header.iterator();
     while (iter.next()) |entry| {
         const tensor_name = entry.key_ptr.*;
@@ -280,7 +261,7 @@ fn writeHeaderToFile(header: json.ObjectMap, path: []const u8) !void {
 
     try json.Stringify.value(json.Value{ .object = header }, .{ .whitespace = .indent_2 }, &output_writer.interface);
     try output_writer.interface.flush();
-    std.debug.print("New header written\n", .{path});
+    std.debug.print("New header written\n", .{});
 }
 
 fn readHeaderData(allocator: std.mem.Allocator, reader: *std.Io.Reader) ![]u8 {
@@ -292,36 +273,24 @@ fn readHeaderData(allocator: std.mem.Allocator, reader: *std.Io.Reader) ![]u8 {
     return header_data;
 }
 
-fn parseHeader(allocator: std.mem.Allocator, tensor_reader: *std.Io.Reader) !void {
-    const header_data = try readHeaderData(allocator, tensor_reader);
-    defer allocator.free(header_data);
+fn parseHeader(tensor_reader: *std.Io.Reader) !void {
+    var header_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator); // TODO: do not create it here
+    defer header_arena.deinit();
+    const arena = header_arena.allocator();
 
-    const parsed = try json.parseFromSlice(json.Value, allocator, header_data, .{});
-    defer parsed.deinit();
+    const header_data = try readHeaderData(arena, tensor_reader);
 
-    const tensors = try loadTensorsFromHeader(allocator, &parsed);
-    defer {
-        for (tensors) |*tensor| {
-            allocator.free(tensor.base_name);
-        }
-        allocator.free(tensors);
-    }
+    const parsed = try json.parseFromSliceLeaky(json.Value, arena, header_data, .{});
 
+    const tensors = try loadTensorsFromHeader(arena, &parsed);
     std.mem.sort(TensorInfo, tensors, {}, sortTensorFn);
 
-    var new_header: json.ObjectMap = .init(allocator);
-    defer {
-        var header_iter = new_header.iterator();
-        while (header_iter.next()) |entry| {
-            deinitJsonValue(allocator, entry.value_ptr);
-        }
-        new_header.deinit();
-    }
-
-    try transformHeader(allocator, tensors, &new_header);
+    var new_header: json.ObjectMap = .init(arena);
+    try transformHeader(arena, tensors, &new_header);
     try writeHeaderToFile(new_header, "NEW_HEADER.json");
 }
 
 pub fn dequant_safetensors(allocator: std.mem.Allocator, tensor_reader: *std.Io.Reader) !void {
-    try parseHeader(allocator, tensor_reader);
+    _ = allocator;
+    try parseHeader(tensor_reader);
 }

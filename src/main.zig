@@ -20,7 +20,7 @@ pub fn main() !void {
     var safetensors_buf: [4096]u8 = undefined;
     var safetensors_reader = safetensors_file.reader(&safetensors_buf);
 
-    mxfp4Loader.dequant_tensor(&safetensors_reader.interface) catch |err| {
+    mxfp4Loader.dequant_tensor(allocator, &safetensors_reader.interface) catch |err| {
         std.debug.print("Error: {}\n", .{err});
         return err;
     };

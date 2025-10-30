@@ -4,16 +4,13 @@ const json = std.json;
 const TensorInfo = struct {
     name: []const u8,
     dtype: []const u8,
-    shape: std.ArrayList(i64),
-    data_offsets: [2]usize,
+    shape: [4]u32,
+    shape_len: usize,
+    data_offsets: [2]u64,
     // THe following are not in the json
-    is_mxfp4_blocks: bool,
-    is_mxfp4_scales: bool,
+    is_mxfp4_blocks: bool = false,
+    is_mxfp4_scales: bool = false,
     base_name: []const u8,
-
-    fn deinit(self: *TensorInfo, allocator: std.mem.Allocator) void {
-        self.shape.deinit(allocator);
-    }
 };
 
 const MxfpPair = struct {
@@ -80,9 +77,11 @@ fn load_header(allocator: std.mem.Allocator, parsed_header: *const json.Parsed(j
         const shape_array = tensor_info.object.get("shape").?.array;
         const offsets_array = tensor_info.object.get("data_offsets").?.array;
 
-        var shape: std.ArrayList(i64) = .empty;
+        var shape: [4]u32 = undefined;
+        var shape_len: usize = 0;
         for (shape_array.items) |dim| {
-            try shape.append(allocator, dim.integer);
+            shape[shape_len] = @as(u32, @intCast(dim.integer));
+            shape_len += 1;
         }
 
         const data_offsets = [2]usize{
@@ -98,6 +97,7 @@ fn load_header(allocator: std.mem.Allocator, parsed_header: *const json.Parsed(j
             .name = tensor_name,
             .dtype = dtype,
             .shape = shape,
+            .shape_len = shape_len,
             .data_offsets = data_offsets,
             .is_mxfp4_blocks = is_blocks,
             .is_mxfp4_scales = is_scales,
@@ -108,7 +108,7 @@ fn load_header(allocator: std.mem.Allocator, parsed_header: *const json.Parsed(j
     return tensors.toOwnedSlice(allocator);
 }
 
-fn add_entry(allocator: std.mem.Allocator, shape: []usize, dtype: []const u8, data_offsets: []i64) !json.Value {
+fn add_entry(allocator: std.mem.Allocator, shape: [4]u32, dtype: []const u8, data_offsets: [2]u64) !json.Value {
     var shape_arr: json.Array = .init(allocator);
     for (shape) |dim| {
         try shape_arr.append(json.Value{ .integer = @as(i64, @intCast(dim)) });
@@ -116,7 +116,7 @@ fn add_entry(allocator: std.mem.Allocator, shape: []usize, dtype: []const u8, da
 
     var offsets_arr: json.Array = .init(allocator);
     for (data_offsets) |size| {
-        try offsets_arr.append(json.Value{ .integer = size });
+        try offsets_arr.append(json.Value{ .integer = @as(i64, @intCast(size)) });
     }
 
     var obj: json.ObjectMap = .init(allocator);
@@ -127,14 +127,38 @@ fn add_entry(allocator: std.mem.Allocator, shape: []usize, dtype: []const u8, da
     return json.Value{ .object = obj };
 }
 
+fn dequant_header(pair: MxfpPair, new_start_offset: u64) TensorInfo {
+    const blocks = pair.blocks;
+
+    const d0: u32 = @intCast(blocks.?.shape[0]);
+    const d1: u32 = @intCast(blocks.?.shape[1]);
+    const d2: u32 = @intCast(blocks.?.shape[2]);
+    const d3: u32 = @intCast(blocks.?.shape[3]);
+
+    const new_end = new_start_offset + (d0 * d1 * d2 * d3 * 2);
+
+    const new_shape: [4]u32 = .{ d0, d2 * d3 * 2, d1, 0 };
+    const new_data_offsets: [2]u64 = .{ new_start_offset, new_end };
+
+    return TensorInfo{
+        .name = blocks.?.base_name,
+        .base_name = blocks.?.base_name,
+        .dtype = "BF16",
+        .shape = new_shape,
+        .shape_len = 3,
+        .data_offsets = new_data_offsets,
+    };
+}
+
 fn transform_header(allocator: std.mem.Allocator, tensors: *const []TensorInfo, new_header: *json.ObjectMap) !void {
     var cumulative_delta: i64 = 0;
-    cumulative_delta += 0; // TODO: remove ca c'est juste pour temporairement enlenver le warning
     var mxfp_pairs: std.StringHashMap(MxfpPair) = .init(allocator);
     defer mxfp_pairs.deinit();
 
     for (tensors.*) |*tensor| {
         const new_start_offset = @as(u64, @intCast(@as(i64, @intCast(tensor.data_offsets[0])) + cumulative_delta));
+
+        const tensor_size = tensor.data_offsets[1] - tensor.data_offsets[0];
 
         if (tensor.is_mxfp4_blocks or tensor.is_mxfp4_scales) {
             // We find a mxfp4 tensor
@@ -151,18 +175,28 @@ fn transform_header(allocator: std.mem.Allocator, tensors: *const []TensorInfo, 
 
             if (item.value_ptr.isComplete()) {
                 std.debug.print("Found a pair of mxfp4: {s}\n", .{tensor.base_name});
-                _ = mxfp_pairs.remove(tensor.base_name);
+                // 1. transform
+
+                const dequanted_tensor = dequant_header(item.value_ptr.*, new_start_offset);
+                cumulative_delta -= @as(i64, @intCast(tensor_size));
+                cumulative_delta += @as(i64, @intCast((dequanted_tensor.data_offsets[1] - dequanted_tensor.data_offsets[0])));
+
+                const new_entry = try add_entry(allocator, dequanted_tensor.shape, dequanted_tensor.dtype, dequanted_tensor.data_offsets);
+                try new_header.put(tensor.base_name, new_entry);
+
+                _ = mxfp_pairs.remove(tensor.base_name); // on fois qu'on a fini on supprime de la map
+            } else {
+                cumulative_delta -= @as(i64, @intCast(tensor_size));
             }
         } else {
             // We find a regular tensor
             std.debug.print("Found a regular tensor: {s}\n", .{tensor.base_name});
-            const tensor_size = tensor.data_offsets[1] - tensor.data_offsets[0];
             const new_end_offset = new_start_offset + tensor_size;
             std.debug.print("New offsets for tensor: [{}, {}] => [{}, {}]\n", .{ tensor.data_offsets[0], tensor.data_offsets[1], new_start_offset, new_end_offset });
 
-            var new_offsets: [2]usize = .{ new_start_offset, new_end_offset };
+            const new_offsets: [2]usize = .{ new_start_offset, new_end_offset };
 
-            const new_entry = try add_entry(allocator, &new_offsets, tensor.dtype, tensor.shape.items);
+            const new_entry = try add_entry(allocator, tensor.shape, tensor.dtype, new_offsets);
             try new_header.put(tensor.base_name, new_entry);
         }
 
@@ -184,7 +218,6 @@ fn parse_header(allocator: std.mem.Allocator, tensor_reader: *std.Io.Reader) !vo
     const tensors: []TensorInfo = try load_header(allocator, &parsed);
     defer { // free one by one
         for (tensors) |*tensor| {
-            tensor.deinit(allocator);
             allocator.free(tensor.base_name);
         }
         allocator.free(tensors);

@@ -2,25 +2,28 @@ const std = @import("std");
 const mxfp4Loader = @import("mxfp4Loader");
 
 pub fn main() !void {
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
-    try mxfp4Loader.bufferedPrint();
-}
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
 
-test "simple test" {
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(i32) = .empty;
-    defer list.deinit(gpa); // Try commenting this out and see if zig detects the memory leak!
-    try list.append(gpa, 42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
-}
+    const allocator = gpa.allocator();
 
-test "fuzz example" {
-    const Context = struct {
-        fn testOne(context: @This(), input: []const u8) anyerror!void {
-            _ = context;
-            // Try passing `--fuzz` to `zig build test` and see if it manages to fail this test case!
-            try std.testing.expect(!std.mem.eql(u8, "canyoufindme", input));
-        }
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
+
+    if (args.len != 2) {
+        std.debug.print("Usage: {s} <safetensors_file>", .{args[0]});
+        return error.InvalidArguments;
+    }
+
+    const safetensors_path = args[1];
+    const safetensors_file = try std.fs.cwd().openFile(safetensors_path, .{});
+    var safetensors_buf: [4096]u8 = undefined;
+    var safetensors_reader = safetensors_file.reader(&safetensors_buf);
+
+    mxfp4Loader.dequant_tensor(&safetensors_reader.interface) catch |err| {
+        std.debug.print("Error: {}\n", .{err});
+        return err;
     };
-    try std.testing.fuzz(Context{}, Context.testOne, .{});
+
+    std.debug.print("Success!\n", .{});
 }

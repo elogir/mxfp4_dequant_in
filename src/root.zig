@@ -108,9 +108,9 @@ fn load_header(allocator: std.mem.Allocator, parsed_header: *const json.Parsed(j
     return tensors.toOwnedSlice(allocator);
 }
 
-fn add_entry(allocator: std.mem.Allocator, shape: [4]u32, dtype: []const u8, data_offsets: [2]u64) !json.Value {
+fn add_entry(allocator: std.mem.Allocator, shape: [4]u32, shape_len: usize, dtype: []const u8, data_offsets: [2]u64) !json.Value {
     var shape_arr: json.Array = .init(allocator);
-    for (shape) |dim| {
+    for (shape[0..shape_len]) |dim| {
         try shape_arr.append(json.Value{ .integer = @as(i64, @intCast(dim)) });
     }
 
@@ -127,22 +127,25 @@ fn add_entry(allocator: std.mem.Allocator, shape: [4]u32, dtype: []const u8, dat
     return json.Value{ .object = obj };
 }
 
-fn dequant_header(pair: MxfpPair, new_start_offset: u64) TensorInfo {
-    const blocks = pair.blocks;
+fn dequant_header(blocks: *TensorInfo, new_start_offset: u64) TensorInfo {
+    const d0: u32 = blocks.shape[0];
+    const d1: u32 = blocks.shape[1];
+    const d2: u32 = blocks.shape[2];
+    const d3: u32 = blocks.shape[3]; // block size
 
-    const d0: u32 = @intCast(blocks.?.shape[0]);
-    const d1: u32 = @intCast(blocks.?.shape[1]);
-    const d2: u32 = @intCast(blocks.?.shape[2]);
-    const d3: u32 = @intCast(blocks.?.shape[3]);
+    const dequant_size: u64 = @as(u64, d0) * @as(u64, d1) * @as(u64, d2) * @as(u64, d3 * 2) * 2;
+    const new_end = new_start_offset + dequant_size;
 
-    const new_end = new_start_offset + (d0 * d1 * d2 * d3 * 2);
+    var new_shape: [4]u32 = undefined;
+    new_shape[0] = d0;
+    new_shape[1] = d2 * d3 * 2;
+    new_shape[2] = d1;
 
-    const new_shape: [4]u32 = .{ d0, d2 * d3 * 2, d1, 0 };
     const new_data_offsets: [2]u64 = .{ new_start_offset, new_end };
 
     return TensorInfo{
-        .name = blocks.?.base_name,
-        .base_name = blocks.?.base_name,
+        .name = blocks.base_name,
+        .base_name = blocks.base_name,
         .dtype = "BF16",
         .shape = new_shape,
         .shape_len = 3,
@@ -173,20 +176,21 @@ fn transform_header(allocator: std.mem.Allocator, tensors: *const []TensorInfo, 
                 item.value_ptr.scales = tensor;
             }
 
+            cumulative_delta -= @as(i64, @intCast(tensor_size));
+
             if (item.value_ptr.isComplete()) {
                 std.debug.print("Found a pair of mxfp4: {s}\n", .{tensor.base_name});
-                // 1. transform
 
-                const dequanted_tensor = dequant_header(item.value_ptr.*, new_start_offset);
-                cumulative_delta -= @as(i64, @intCast(tensor_size));
-                cumulative_delta += @as(i64, @intCast((dequanted_tensor.data_offsets[1] - dequanted_tensor.data_offsets[0])));
+                const blocks = item.value_ptr.blocks.?;
+                const dequanted_tensor = dequant_header(blocks, new_start_offset);
 
-                const new_entry = try add_entry(allocator, dequanted_tensor.shape, dequanted_tensor.dtype, dequanted_tensor.data_offsets);
+                const dequant_size = dequanted_tensor.data_offsets[1] - dequanted_tensor.data_offsets[0];
+                cumulative_delta += @as(i64, @intCast(dequant_size));
+
+                const new_entry = try add_entry(allocator, dequanted_tensor.shape, dequanted_tensor.shape_len, dequanted_tensor.dtype, dequanted_tensor.data_offsets);
                 try new_header.put(tensor.base_name, new_entry);
 
-                _ = mxfp_pairs.remove(tensor.base_name); // on fois qu'on a fini on supprime de la map
-            } else {
-                cumulative_delta -= @as(i64, @intCast(tensor_size));
+                _ = mxfp_pairs.remove(tensor.base_name);
             }
         } else {
             // We find a regular tensor
@@ -194,14 +198,11 @@ fn transform_header(allocator: std.mem.Allocator, tensors: *const []TensorInfo, 
             const new_end_offset = new_start_offset + tensor_size;
             std.debug.print("New offsets for tensor: [{}, {}] => [{}, {}]\n", .{ tensor.data_offsets[0], tensor.data_offsets[1], new_start_offset, new_end_offset });
 
-            const new_offsets: [2]usize = .{ new_start_offset, new_end_offset };
+            const new_offsets: [2]u64 = .{ new_start_offset, new_end_offset };
 
-            const new_entry = try add_entry(allocator, tensor.shape, tensor.dtype, new_offsets);
+            const new_entry = try add_entry(allocator, tensor.shape, tensor.shape_len, tensor.dtype, new_offsets);
             try new_header.put(tensor.base_name, new_entry);
         }
-
-        // Pour l'instant on a pas les 2 cas mais globalement pour un cas de base: (EDIT) C'est totalement faux enfaite
-        // cumulative_delta += @as(i64, @intCast(tensor.data_offsets[1])) - @as(i64, @intCast(tensor.data_offsets[0]));
     }
 }
 

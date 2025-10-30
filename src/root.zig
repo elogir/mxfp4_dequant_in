@@ -2,6 +2,16 @@ const std = @import("std");
 const json = std.json;
 
 fn parse_header(allocator: std.mem.Allocator, tensor_reader: *std.Io.Reader) !void {
+
+    // TEMP
+    var buff_a_volonter: [0xFFFF]u8 = undefined;
+    const output_file = try std.fs.cwd().createFile("TEST_OUT_HEADER.json", .{});
+    const output_writer = output_file.writer(&buff_a_volonter);
+    const output = &output_writer.interface;
+    defer output_file.close();
+
+    // TEMP
+
     const header_size: usize = @intCast(try tensor_reader.takeInt(u64, .little));
     const header_data = try allocator.alloc(u8, header_size);
     defer allocator.free(header_data);

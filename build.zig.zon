@@ -14,7 +14,7 @@
     // on the following line intact, so that it shows up in code reviews that
     // modify the field.
     .fingerprint = 0xc36111a376a5770f, // Changing this has security and trust implications.
-    .minimum_zig_version = "0.16.0-dev.732+2f3234c76",
+    .minimum_zig_version = "0.15.2",
     .dependencies = .{},
     .paths = .{
         "build.zig",

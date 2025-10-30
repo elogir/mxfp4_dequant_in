@@ -110,14 +110,15 @@ fn load_header(allocator: std.mem.Allocator, parsed_header: *const json.Parsed(j
 
 fn transform_header(allocator: std.mem.Allocator, tensors: *const []TensorInfo) !void {
     var cumulative_delta: i64 = 0;
+    cumulative_delta += 0; // TODO: remove ca c'est juste pour temporairement enlenver le warning
     var mxfp_pairs: std.StringHashMap(MxfpPair) = .init(allocator);
     defer mxfp_pairs.deinit();
 
     for (tensors.*) |*tensor| {
         const new_start_offset = @as(u64, @intCast(@as(i64, @intCast(tensor.data_offsets[0])) + cumulative_delta));
-        _ = new_start_offset;
 
         if (tensor.is_mxfp4_blocks or tensor.is_mxfp4_scales) {
+            // We find a mxfp4 tensor
             const item = try mxfp_pairs.getOrPut(tensor.base_name);
             if (!item.found_existing) {
                 item.value_ptr.* = MxfpPair{};
@@ -129,14 +130,20 @@ fn transform_header(allocator: std.mem.Allocator, tensors: *const []TensorInfo) 
                 item.value_ptr.scales = tensor;
             }
 
-            if (item.value_ptr.blocks != null and item.value_ptr.scales != null) {
-                std.debug.print("Found a pair of mxfp4 {s}\n", .{tensor.base_name});
+            if (item.value_ptr.isComplete()) {
+                std.debug.print("Found a pair of mxfp4: {s}\n", .{tensor.base_name});
                 _ = mxfp_pairs.remove(tensor.base_name);
             }
+        } else {
+            // We find a regular tensor
+            std.debug.print("Found a regular tensor: {s}\n", .{tensor.base_name});
+            const tensor_size = tensor.data_offsets[1] - tensor.data_offsets[0];
+            const new_end_offset = new_start_offset + tensor_size;
+            std.debug.print("New offsets for tensor: [{}, {}] => [{}, {}]\n", .{ tensor.data_offsets[0], tensor.data_offsets[1], new_start_offset, new_end_offset });
         }
 
-        // Pour l'instant on a pas les 2 cas mais globalement pour un cas de base:
-        cumulative_delta += @as(i64, @intCast(tensor.data_offsets[1])) - @as(i64, @intCast(tensor.data_offsets[0]));
+        // Pour l'instant on a pas les 2 cas mais globalement pour un cas de base: (EDIT) C'est totalement faux enfaite
+        // cumulative_delta += @as(i64, @intCast(tensor.data_offsets[1])) - @as(i64, @intCast(tensor.data_offsets[0]));
     }
 }
 

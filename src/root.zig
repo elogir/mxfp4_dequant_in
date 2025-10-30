@@ -61,7 +61,7 @@ fn deinitJsonValue(allocator: std.mem.Allocator, value: *json.Value) void {
             }
             arr.deinit();
         },
-        else => unreachable, // dans notre cas en tout cas
+        else => {}, // ca devrait free ayuto
     }
 }
 
@@ -108,7 +108,26 @@ fn load_header(allocator: std.mem.Allocator, parsed_header: *const json.Parsed(j
     return tensors.toOwnedSlice(allocator);
 }
 
-fn transform_header(allocator: std.mem.Allocator, tensors: *const []TensorInfo) !void {
+fn add_entry(allocator: std.mem.Allocator, shape: []usize, dtype: []const u8, data_offsets: []i64) !json.Value {
+    var shape_arr: json.Array = .init(allocator);
+    for (shape) |dim| {
+        try shape_arr.append(json.Value{ .integer = @as(i64, @intCast(dim)) });
+    }
+
+    var offsets_arr: json.Array = .init(allocator);
+    for (data_offsets) |size| {
+        try offsets_arr.append(json.Value{ .integer = size });
+    }
+
+    var obj: json.ObjectMap = .init(allocator);
+    try obj.put("dtype", json.Value{ .string = dtype });
+    try obj.put("shape", json.Value{ .array = shape_arr });
+    try obj.put("data_offsets", json.Value{ .array = offsets_arr });
+
+    return json.Value{ .object = obj };
+}
+
+fn transform_header(allocator: std.mem.Allocator, tensors: *const []TensorInfo, new_header: *json.ObjectMap) !void {
     var cumulative_delta: i64 = 0;
     cumulative_delta += 0; // TODO: remove ca c'est juste pour temporairement enlenver le warning
     var mxfp_pairs: std.StringHashMap(MxfpPair) = .init(allocator);
@@ -140,6 +159,11 @@ fn transform_header(allocator: std.mem.Allocator, tensors: *const []TensorInfo) 
             const tensor_size = tensor.data_offsets[1] - tensor.data_offsets[0];
             const new_end_offset = new_start_offset + tensor_size;
             std.debug.print("New offsets for tensor: [{}, {}] => [{}, {}]\n", .{ tensor.data_offsets[0], tensor.data_offsets[1], new_start_offset, new_end_offset });
+
+            var new_offsets: [2]usize = .{ new_start_offset, new_end_offset };
+
+            const new_entry = try add_entry(allocator, &new_offsets, tensor.dtype, tensor.shape.items);
+            try new_header.put(tensor.base_name, new_entry);
         }
 
         // Pour l'instant on a pas les 2 cas mais globalement pour un cas de base: (EDIT) C'est totalement faux enfaite
@@ -171,7 +195,7 @@ fn parse_header(allocator: std.mem.Allocator, tensor_reader: *std.Io.Reader) !vo
 
     // Now we have a sorted slice of tensor infos that we can process in a second pass
 
-    var new_header = json.ObjectMap.init(allocator);
+    var new_header: json.ObjectMap = .init(allocator);
     defer {
         var header_iter = new_header.iterator();
         while (header_iter.next()) |entry| {
@@ -180,7 +204,7 @@ fn parse_header(allocator: std.mem.Allocator, tensor_reader: *std.Io.Reader) !vo
         new_header.deinit();
     }
 
-    try transform_header(allocator, &tensors);
+    try transform_header(allocator, &tensors, &new_header);
 
     // Write new header to file
     var output_buffer: [0xFFFF]u8 = undefined;

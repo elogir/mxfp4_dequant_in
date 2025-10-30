@@ -222,13 +222,6 @@ fn handleRegularTensor(
     const tensor_size = tensor.size();
     const new_offsets: [2]u64 = .{ offset, offset + tensor_size };
 
-    // std.debug.print("Offsets [{}, {}] => [{}, {}]\n", .{
-    //     tensor.data_offsets[0],
-    //     tensor.data_offsets[1],
-    //     new_offsets[0],
-    //     new_offsets[1],
-    // });
-
     const entry = try createTensorEntry(allocator, tensor.shape, tensor.shape_len, tensor.dtype, new_offsets);
     try new_header.put(tensor.base_name, entry);
 }
@@ -256,16 +249,23 @@ fn transformHeader(allocator: std.mem.Allocator, tensors: []TensorInfo, new_head
     }
 }
 
-// TEMPORARY
-fn writeHeaderToFile(header: json.ObjectMap, path: []const u8) !void {
-    var output_buffer: [0xFFFF]u8 = undefined;
+fn writeHeaderToFile(allocator: std.mem.Allocator, header: json.ObjectMap, path: []const u8) !void {
+    const json_bytes = try json.Stringify.valueAlloc(allocator, json.Value{ .object = header }, .{ .whitespace = .minified });
+    defer allocator.free(json_bytes);
+
+    const header_size: u64 = json_bytes.len;
+
     const output_file = try std.fs.cwd().createFile(path, .{});
     defer output_file.close();
-    var output_writer = output_file.writer(&output_buffer);
 
-    try json.Stringify.value(json.Value{ .object = header }, .{ .whitespace = .indent_2 }, &output_writer.interface);
-    try output_writer.interface.flush();
-    std.debug.print("New header written\n", .{});
+    var file_buffer: [0xFFFF]u8 = undefined;
+    var file_writer = output_file.writer(&file_buffer);
+
+    try file_writer.interface.writeInt(u64, header_size, .little);
+    try file_writer.interface.writeAll(json_bytes);
+    try file_writer.interface.flush();
+
+    std.debug.print("New header written: {} bytes\n", .{header_size});
 }
 
 fn readHeaderData(allocator: std.mem.Allocator, reader: *std.Io.Reader) ![]u8 {
@@ -293,9 +293,14 @@ fn parseHeader(tensor_reader: *std.Io.Reader) !void {
     std.mem.sort(TensorInfo, tensors, {}, sortTensorFn);
 
     var new_header: json.ObjectMap = .init(arena);
+
+    if (parsed.object.get("__metadata__")) |metadata| {
+        try new_header.put("__metadata__", metadata);
+    }
+
     try transformHeader(arena, tensors, &new_header);
 
-    try writeHeaderToFile(new_header, "NEW_HEADER.json"); // TEMP CALL
+    try writeHeaderToFile(arena, new_header, "NEW_HEADER.json"); // TEMP CALL
 }
 
 pub fn dequant_safetensors(allocator: std.mem.Allocator, tensor_reader: *std.Io.Reader) !void {

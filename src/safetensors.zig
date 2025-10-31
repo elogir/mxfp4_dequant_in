@@ -49,7 +49,7 @@ pub const MxfpPair = struct {
     }
 };
 
-fn calculateDequantSize(blocks: *TensorInfo) u64 {
+pub fn calculateDequantSize(blocks: TensorInfo) u64 {
     const d0: u32 = blocks.shape[0];
     const d1: u32 = blocks.shape[1];
     const d2: u32 = blocks.shape[2];
@@ -58,7 +58,7 @@ fn calculateDequantSize(blocks: *TensorInfo) u64 {
     return @as(u64, d0) * @as(u64, d1) * @as(u64, d2) * @as(u64, d3 * 2) * 2;
 }
 
-fn calculateDequantShape(blocks: *TensorInfo) struct { shape: [4]u32, len: usize } {
+fn calculateDequantShape(blocks: TensorInfo) struct { shape: [4]u32, len: usize } {
     var new_shape: [4]u32 = undefined;
 
     new_shape[0] = blocks.shape[0];
@@ -76,8 +76,8 @@ pub const DequantedTensor = struct {
     data_offsets: [2]u64,
 
     pub fn init(blocks: *TensorInfo, start_offset: u64) DequantedTensor {
-        const dequant_size = calculateDequantSize(blocks);
-        const shape_result = calculateDequantShape(blocks);
+        const dequant_size = calculateDequantSize(blocks.*);
+        const shape_result = calculateDequantShape(blocks.*);
 
         return DequantedTensor{
             .name = blocks.base_name,
@@ -253,7 +253,7 @@ fn sortTensorFn(_: void, lhs: TensorInfo, rhs: TensorInfo) bool {
     return lhs.data_offsets[0] < rhs.data_offsets[0];
 }
 
-pub fn parseHeader(arena: std.mem.Allocator, tensor_reader: *std.Io.Reader) !struct { old_header: *const []TensorInfo, new_header: *const []TensorInfo, new_json: *json.ObjectMap } {
+pub fn parseHeader(arena: std.mem.Allocator, tensor_reader: *std.Io.Reader) !struct { old_header: []TensorInfo, new_header: []TensorInfo, new_json: *json.ObjectMap } {
     const header_size: usize = @intCast(try tensor_reader.takeInt(u64, .little));
     const header_data = try arena.alloc(u8, header_size);
     try tensor_reader.readSliceAll(header_data);
@@ -263,15 +263,16 @@ pub fn parseHeader(arena: std.mem.Allocator, tensor_reader: *std.Io.Reader) !str
     const tensors = try loadTensorsFromHeader(arena, &parsed);
     std.mem.sort(TensorInfo, tensors, {}, sortTensorFn);
 
-    var new_header: json.ObjectMap = .init(arena);
+    const new_header_ptr = try arena.create(json.ObjectMap);
+    new_header_ptr.* = .init(arena);
 
     if (parsed.object.get("__metadata__")) |metadata| {
-        try new_header.put("__metadata__", metadata);
+        try new_header_ptr.put("__metadata__", metadata);
     }
 
-    try transformHeader(arena, tensors, &new_header);
-    const new_header_value = json.Value{ .object = new_header };
+    try transformHeader(arena, tensors, new_header_ptr);
+    const new_header_value = json.Value{ .object = new_header_ptr.* };
     const new_tensors = try loadTensorsFromHeader(arena, &new_header_value);
 
-    return .{ .old_header = &tensors, .new_header = &new_tensors, .new_json = &new_header };
+    return .{ .old_header = tensors, .new_header = new_tensors, .new_json = new_header_ptr };
 }

@@ -1,6 +1,7 @@
 const std = @import("std");
 const json = std.json;
 const safetensors = @import("safetensors.zig");
+const mxfp4 = @import("mxfp4.zig");
 
 // TEMP FUNC
 fn writeHeaderToFile(allocator: std.mem.Allocator, header: *json.ObjectMap, tensor_writer: *std.Io.Writer) !void {
@@ -16,12 +17,12 @@ fn writeHeaderToFile(allocator: std.mem.Allocator, header: *json.ObjectMap, tens
 // TEMP FUNC
 
 pub fn dequant_safetensors(allocator: std.mem.Allocator, tensor_reader: *std.Io.Reader, tensor_writer: *std.Io.Writer) !void {
-    _ = allocator;
-
-    var header_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer header_arena.deinit();
+    var header_arena = std.heap.ArenaAllocator.init(allocator);
     const arena = header_arena.allocator();
 
     const new_header = try safetensors.parseHeader(arena, tensor_reader);
     try writeHeaderToFile(arena, new_header.new_json, tensor_writer);
+    try mxfp4.processTensors(allocator, new_header.old_header, tensor_reader, tensor_writer);
+
+    header_arena.deinit();
 }

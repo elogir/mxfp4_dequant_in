@@ -167,6 +167,9 @@ pub const Reader = struct {
                 if (tensor.is_mxfp4_blocks or tensor.is_mxfp4_scales) {
                     // handle mxfp4 tensor
                     std.debug.print("Dequantizing MXFP4 pair: {s}\n", .{tensor.base_name});
+                    r.processTensor(tensor) catch {
+                        return error.EndOfStream; // pas optimal aussi, il faudrait une meilleure gestion d'erreur
+                    };
                 } else {
                     // Handle regular tensor (copy)
                     std.debug.print("Copying regular tensor: {s}\n", .{tensor.base_name});
@@ -212,7 +215,7 @@ pub const Reader = struct {
             const blocks = entry.value_ptr.blocks_data.?;
             const scales = entry.value_ptr.scales_data.?;
 
-            const ret = try dequantizeMxfp4(r.allocator, entry.value_ptr.*);
+            const ret = try r.dequantizeMxfp4(entry.value_ptr.*);
 
             r.allocator.free(blocks);
             r.allocator.free(scales);
@@ -234,8 +237,11 @@ pub const Reader = struct {
         const in_features = n_blocks * blk_size * 2;
 
         // Buffer pour un expert a la fois
-        const expert_buffer_a_volonte = try r.allocator.alloc(u16, in_features * out_features);
-        defer r.allocator.free(expert_buffer_a_volonte);
+        // const expert_buffer_a_volonte = try r.allocator.alloc(u16, in_features * out_features);
+        // defer r.allocator.free(expert_buffer_a_volonte);
+
+        const siz = n_experts * out_features * in_features * 2;
+        r.output_buff = try r.allocator.alloc(u8, siz);
 
         for (0..n_experts) |expert_idx| {
             const scales_offset = expert_idx * out_features * n_blocks;
@@ -285,15 +291,14 @@ pub const Reader = struct {
                             const bf16_value = mxfp4.floatToBF16(scaled_vec[i]); // Pareil que au dessus
 
                             const in_idx = block_idx * blk_size * 2 + byte_idx * 2 + i;
-                            expert_buffer_a_volonte[in_idx * out_features + out_idx] = bf16_value;
+                            r.output_buff[in_idx * out_features + out_idx] = bf16_value;
                         }
                     }
                 }
             }
 
-            // OLD CODE
-            // const output_bytes: []u8 = std.mem.sliceAsBytes(expert_buffer_a_volonte);
-            // try output_writer.writeAll(output_bytes);
+            r.output_buffer_valid = siz;
+            r.send_offset = 0;
         }
     }
 };

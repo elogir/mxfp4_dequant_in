@@ -27,11 +27,11 @@ const FP4_TO_FLOAT_TABLE: [16]f32 = compute_fp4_table: {
     break :compute_fp4_table table;
 };
 
-inline fn fp4ToFloat(fp4: u4) f32 {
+pub inline fn fp4ToFloat(fp4: u4) f32 {
     return FP4_TO_FLOAT_TABLE[fp4];
 }
 
-inline fn e8m0ToFloat(e8m0: u8) f32 {
+pub inline fn e8m0ToFloat(e8m0: u8) f32 {
     // NaN selon spec
     if (e8m0 == 0b11111111) return std.math.nan(f32);
 
@@ -40,7 +40,7 @@ inline fn e8m0ToFloat(e8m0: u8) f32 {
     return std.math.scalbn(@as(f32, 1.0), exponent);
 }
 
-inline fn floatToBF16(value: f32) u16 {
+pub inline fn floatToBF16(value: f32) u16 {
     const bits: u32 = @bitCast(value);
 
     return @intCast(bits >> 16);

@@ -2,12 +2,12 @@ const std = @import("std");
 const mxfp4Loader = @import("mxfp4Loader");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
     defer _ = gpa.deinit();
 
     const allocator = gpa.allocator();
 
-    var header_arena = std.heap.ArenaAllocator.init(allocator);
+    var header_arena: std.heap.ArenaAllocator = .init(allocator);
     defer header_arena.deinit();
     const arena = header_arena.allocator();
 

@@ -245,6 +245,7 @@ pub const Reader = struct {
         const buff: []align(1) u16 = std.mem.bytesAsSlice(u16, r.output_buff[0..siz]); // hack
 
         for (0..n_experts) |expert_idx| {
+            const expert_offset = expert_idx * out_features * in_features;
             const scales_offset = expert_idx * out_features * n_blocks;
             const blocks_offset = expert_idx * out_features * n_blocks * blk_size;
 
@@ -292,7 +293,7 @@ pub const Reader = struct {
                             const bf16_value = mxfp4.floatToBF16(scaled_vec[i]); // Pareil que au dessus
 
                             const in_idx = block_idx * blk_size * 2 + byte_idx * 2 + i;
-                            buff[in_idx * out_features + out_idx] = bf16_value;
+                            buff[expert_offset + in_idx * out_features + out_idx] = bf16_value;
                         }
                     }
                 }

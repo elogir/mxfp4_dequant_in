@@ -253,7 +253,7 @@ fn sortTensorFn(_: void, lhs: TensorInfo, rhs: TensorInfo) bool {
     return lhs.data_offsets[0] < rhs.data_offsets[0];
 }
 
-pub fn parseHeader(arena: std.mem.Allocator, tensor_reader: *std.Io.Reader) !*json.ObjectMap {
+pub fn parseHeader(arena: std.mem.Allocator, tensor_reader: *std.Io.Reader) !struct { old_header: *const []TensorInfo, new_header: *const []TensorInfo, new_json: *json.ObjectMap } {
     const header_size: usize = @intCast(try tensor_reader.takeInt(u64, .little));
     const header_data = try arena.alloc(u8, header_size);
     try tensor_reader.readSliceAll(header_data);
@@ -270,6 +270,8 @@ pub fn parseHeader(arena: std.mem.Allocator, tensor_reader: *std.Io.Reader) !*js
     }
 
     try transformHeader(arena, tensors, &new_header);
+    const new_header_value = json.Value{ .object = new_header };
+    const new_tensors = try loadTensorsFromHeader(arena, &new_header_value);
 
-    return &new_header;
+    return .{ .old_header = &tensors, .new_header = &new_tensors, .new_json = &new_header };
 }

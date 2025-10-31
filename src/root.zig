@@ -23,5 +23,5 @@ pub fn dequant_safetensors(allocator: std.mem.Allocator, tensor_reader: *std.Io.
     const arena = header_arena.allocator();
 
     const new_header = try safetensors.parseHeader(arena, tensor_reader);
-    try writeHeaderToFile(arena, new_header, tensor_writer);
+    try writeHeaderToFile(arena, new_header.new_json, tensor_writer);
 }

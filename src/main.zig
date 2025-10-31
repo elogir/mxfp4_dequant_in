@@ -14,19 +14,21 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    if (args.len != 2) {
-        std.debug.print("Usage: {s} <safetensors_file>", .{args[0]});
+    if (args.len != 3) {
+        std.debug.print("Usage: {s} <input_safetensors> <output_safetensors>\n", .{args[0]});
         return error.InvalidArguments;
     }
 
     const safetensors_path = args[1];
+    const output_path = args[2];
+
     const safetensors_file = try std.fs.cwd().openFile(safetensors_path, .{});
     defer safetensors_file.close();
 
     var safetensors_buf: [4096]u8 = undefined;
     var safetensors_reader = safetensors_file.reader(&safetensors_buf);
 
-    const output_file = try std.fs.cwd().createFile("output.safetensors", .{});
+    const output_file = try std.fs.cwd().createFile(output_path, .{});
     defer output_file.close();
 
     var file_buffer: [0xFFFF]u8 = undefined;
@@ -35,16 +37,13 @@ pub fn main() !void {
     var dequant_buffer: [8192]u8 = undefined;
     var dequant_reader = try mxfp4Loader.dequant_safetensors(
         allocator,
-        arena,
+        arena, // Arena pour pouvoir utiliser le json leaky
         &safetensors_reader.interface,
         &dequant_buffer,
     );
     defer dequant_reader.deinit();
 
-    // Stream from dequant reader to output writer
     _ = try dequant_reader.interface.streamRemaining(&file_writer.interface);
-
-    // try mxfp4Loader.dequant_safetensors(allocator, &safetensors_reader.interface, &file_writer.interface);
 
     try file_writer.interface.flush();
 }

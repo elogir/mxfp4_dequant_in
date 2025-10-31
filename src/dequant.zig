@@ -36,7 +36,6 @@ pub const Reader = struct {
     // Everything tensor related
     mxfp_buffers_pair: std.StringHashMap(MxfpBuffer),
     output_buff: []u8,
-    output_buffer_valid: usize = 0,
     tensor_index: usize = 0,
 
     send_state: SendState = .header_length,
@@ -143,8 +142,8 @@ pub const Reader = struct {
             },
 
             .tensor_dequant => {
-                if (r.send_offset < r.output_buffer_valid) {
-                    const remaining = r.output_buff[r.send_offset..r.output_buffer_valid];
+                if (r.send_offset < r.output_buff.len) {
+                    const remaining = r.output_buff[r.send_offset..];
                     const to_send = limit.slice(remaining);
 
                     try w.writeAll(to_send);
@@ -181,7 +180,6 @@ pub const Reader = struct {
                         return error.ReadFailed;
                     };
 
-                    r.output_buffer_valid = tensor.size();
                     r.send_offset = 0;
                 }
 
@@ -301,7 +299,6 @@ pub const Reader = struct {
             }
         }
 
-        r.output_buffer_valid = siz;
         r.send_offset = 0;
     }
 };

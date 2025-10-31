@@ -92,6 +92,7 @@ fn dequantizeMxfp4(allocator: std.mem.Allocator, tensor_buffer: MxfpBuffer, outp
                 const block = blocks_buf[block_offset..][0..blk_size];
 
                 var byte_idx: usize = 0;
+                std.debug.assert(blk_size % 4 == 0); // Sinon faut traiter la tail sans vec
                 while (byte_idx + 4 <= blk_size) : (byte_idx += 4) {
                     // Charger 4 bytes = 8 valeurs fp4
                     var fp4_values: @Vector(VEC_SIZE, u4) = undefined; // ex: vecsize = 8 donc 8x4=32
@@ -105,7 +106,7 @@ fn dequantizeMxfp4(allocator: std.mem.Allocator, tensor_buffer: MxfpBuffer, outp
                         fp4_values[i * 2 + 1] = fp4_high;
                     }
 
-                    // Convertir les 8 fp4 en f32
+                    // Convertir les 8 fp4 en f32 (@shuffle? mais on a pas de values au comptime?)
                     var fp4_floats: @Vector(VEC_SIZE, f32) = undefined;
                     inline for (0..VEC_SIZE) |i| {
                         fp4_floats[i] = fp4ToFloat(fp4_values[i]); // Je suppose que vu que la func est inline ca va juste charger directement?

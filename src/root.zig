@@ -17,7 +17,7 @@ fn writeHeaderToFile(allocator: std.mem.Allocator, header: *json.ObjectMap, tens
 }
 // TEMP FUNC
 
-pub fn dequant_safetensors(allocator: std.mem.Allocator, tensor_reader: *std.Io.Reader, buffer: []u8) !dequant.Reader {
+pub fn dequant_safetensors(allocator: std.mem.Allocator, arena: std.mem.Allocator, tensor_reader: *std.Io.Reader, buffer: []u8) !dequant.Reader {
     // var header_arena = std.heap.ArenaAllocator.init(allocator);
     // const arena = header_arena.allocator();
 
@@ -27,5 +27,5 @@ pub fn dequant_safetensors(allocator: std.mem.Allocator, tensor_reader: *std.Io.
 
     // header_arena.deinit();
 
-    return dequant.Reader.init(allocator, tensor_reader, buffer);
+    return dequant.Reader.init(allocator, arena, tensor_reader, buffer);
 }

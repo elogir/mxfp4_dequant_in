@@ -7,6 +7,10 @@ pub fn main() !void {
 
     const allocator = gpa.allocator();
 
+    var header_arena = std.heap.ArenaAllocator.init(allocator);
+    defer header_arena.deinit();
+    const arena = header_arena.allocator();
+
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
@@ -31,6 +35,7 @@ pub fn main() !void {
     var dequant_buffer: [8192]u8 = undefined;
     var dequant_reader = try mxfp4Loader.dequant_safetensors(
         allocator,
+        arena,
         &safetensors_reader.interface,
         &dequant_buffer,
     );

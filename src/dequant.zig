@@ -5,6 +5,7 @@ pub const Reader = struct {
 
     input_reader: *std.Io.Reader,
     allocator: std.mem.Allocator,
+    header_arena: std.mem.Allocator,
 
     pub fn initInterface(buffer: []u8) std.Io.Reader {
         return .{
@@ -19,11 +20,13 @@ pub const Reader = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
+        header_arena: std.mem.Allocator,
         input_reader: *std.Io.Reader,
         buffer: []u8,
     ) Reader {
         return .{
             .allocator = allocator,
+            .header_arena = header_arena,
             .input_reader = input_reader,
             .interface = initInterface(buffer),
         };

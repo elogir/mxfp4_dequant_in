@@ -26,8 +26,8 @@ pub const Reader = struct {
         finished,
     };
 
-    inline fn incrementEnum(r: *Reader) void {
-        r.send_state = @enumFromInt(@intFromEnum(r.send_state) + 1);
+    inline fn incrementState(self: *Reader) void {
+        self.send_state = @enumFromInt(@intFromEnum(self.send_state) + 1);
     }
 
     pub fn initInterface(buffer: []u8) std.Io.Reader {
@@ -89,7 +89,7 @@ pub const Reader = struct {
                 r.send_offset += to_send.len;
 
                 if (r.send_offset == 8) {
-                    incrementEnum(r);
+                    r.incrementState();
                     r.send_offset = 0;
                 }
 
@@ -103,7 +103,7 @@ pub const Reader = struct {
                 r.send_offset += to_send.len;
 
                 if (r.send_offset == r.new_header_json_bytes.len) {
-                    incrementEnum(r);
+                    r.incrementState();
                 }
 
                 return to_send.len;

@@ -21,7 +21,7 @@ pub const Reader = struct {
     // Everything tensor related
     mxfp_buffers_pair: std.StringHashMap(mxfp4.MxfpBuffer),
     output_buff: []u8,
-    tensor_idnex: usize = 0,
+    tensor_index: usize = 0,
 
     send_state: SendState = .header_length,
     send_offset: usize = 0,
@@ -70,11 +70,14 @@ pub const Reader = struct {
             .new_header_json_bytes = new_header_json_bytes,
             .new_header_len = @intCast(new_header_json_bytes.len),
             .mxfp_buffers_pair = std.StringHashMap(mxfp4.MxfpBuffer).init(allocator),
+            .output_buff = &[_]u8{},
             .interface = initInterface(buffer),
         };
     }
 
     pub fn deinit(r: *Reader) void {
+        r.allocator.free(r.output_buff);
+
         r.allocator.free(r.new_header_json_bytes);
         // Le header est dans l'arena
 
@@ -127,8 +130,41 @@ pub const Reader = struct {
             },
 
             .tensor_dequant => {
-                r.incrementState();
-                return 0;
+                if (r.send_offset < r.output_buff.len) {
+                    const remaining = r.output_buff[r.send_offset..];
+                    const to_send = limit.slice(remaining);
+
+                    try w.writeAll(to_send);
+                    r.send_offset += to_send.len;
+
+                    return to_send.len;
+                }
+
+                if (r.tensor_index >= r.old_header.len) {
+                    r.incrementState();
+                    return 0;
+                }
+
+                r.allocator.free(r.output_buff); // pas optimal de alloc a chaque fois
+                r.output_buff = &[_]u8{};
+
+                const tensor = r.old_header[r.tensor_index];
+                if (tensor.is_mxfp4_blocks or tensor.is_mxfp4_scales) {
+                    // handle mxfp4 tensor
+                    std.debug.print("Dequantizing MXFP4 pair: {s}\n", .{tensor.base_name});
+                } else {
+                    // Handle regular tensor (copy)
+                    std.debug.print("Copying regular tensor: {s}\n", .{tensor.base_name});
+                    r.output_buff = r.allocator.alloc(u8, tensor.size()) catch {
+                        return error.EndOfStream; // pas optimal aussi, il faudrait une meilleure gestion d'erreur
+                    };
+
+                    try r.input_reader.readSliceAll(r.output_buff[0..tensor.size()]);
+
+                    r.send_offset = 0;
+                }
+
+                return stream(io_reader, w, limit);
             },
 
             .finished => {

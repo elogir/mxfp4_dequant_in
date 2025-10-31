@@ -1,5 +1,6 @@
 const std = @import("std");
 const safetensors = @import("safetensors.zig");
+const mxfp4 = @import("mxfp4.zig");
 const json = std.json;
 
 pub const Reader = struct {
@@ -17,12 +18,18 @@ pub const Reader = struct {
     header_len_sent: bool = false, // tracking header len sent
     header_bytes_pos: usize = 0, // tracking header bytes sent
 
+    // Everything tensor related
+    mxfp_buffers_pair: std.StringHashMap(mxfp4.MxfpBuffer),
+    output_buff: []u8,
+    tensor_idnex: usize = 0,
+
     send_state: SendState = .header_length,
     send_offset: usize = 0,
 
     const SendState = enum {
         header_length,
         header_content,
+        tensor_dequant,
         finished,
     };
 
@@ -62,6 +69,7 @@ pub const Reader = struct {
             .new_header = header_result.new_header,
             .new_header_json_bytes = new_header_json_bytes,
             .new_header_len = @intCast(new_header_json_bytes.len),
+            .mxfp_buffers_pair = std.StringHashMap(mxfp4.MxfpBuffer).init(allocator),
             .interface = initInterface(buffer),
         };
     }
@@ -69,6 +77,15 @@ pub const Reader = struct {
     pub fn deinit(r: *Reader) void {
         r.allocator.free(r.new_header_json_bytes);
         // Le header est dans l'arena
+
+        defer {
+            var iter = r.mxfp_buffers_pair.iterator();
+            while (iter.next()) |entry| {
+                if (entry.value_ptr.blocks_data) |data| r.allocator.free(data);
+                if (entry.value_ptr.scales_data) |data| r.allocator.free(data);
+            }
+            r.mxfp_buffers_pair.deinit();
+        }
     }
 
     fn stream(
@@ -107,6 +124,11 @@ pub const Reader = struct {
                 }
 
                 return to_send.len;
+            },
+
+            .tensor_dequant => {
+                r.incrementState();
+                return 0;
             },
 
             .finished => {

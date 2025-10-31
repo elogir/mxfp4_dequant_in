@@ -6,7 +6,7 @@ const VEC_SIZE_FP4 = VEC_SIZE / 2;
 
 /// Quasi la meme que TensorInfo mais avec la data
 /// (normalement free quasi juste apres vu que les tenseurs sont censes etre adjacents)
-const MxfpBuffer = struct {
+pub const MxfpBuffer = struct {
     blocks_data: ?[]const u8 = null,
     scales_data: ?[]const u8 = null,
     blocks_info: ?safetensors.TensorInfo = null,

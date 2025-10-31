@@ -22,5 +22,13 @@ pub fn main() !void {
     var safetensors_buf: [4096]u8 = undefined;
     var safetensors_reader = safetensors_file.reader(&safetensors_buf);
 
-    try mxfp4Loader.dequant_safetensors(allocator, &safetensors_reader.interface);
+    const output_file = try std.fs.cwd().createFile("output.safetensors", .{});
+    defer output_file.close();
+
+    var file_buffer: [0xFFFF]u8 = undefined;
+    var file_writer = output_file.writer(&file_buffer);
+
+    try mxfp4Loader.dequant_safetensors(allocator, &safetensors_reader.interface, &file_writer.interface);
+
+    try file_writer.interface.flush();
 }

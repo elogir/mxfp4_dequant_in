@@ -1,8 +1,11 @@
 const std = @import("std");
 const safetensors = @import("safetensors.zig");
 
-const VEC_SIZE = 8;
+const VEC_SIZE = 16;
+const VEC_SIZE_FP4 = VEC_SIZE / 2;
 
+/// Quasi la meme que TensorInfo mais avec la data
+/// (normalement free quasi juste apres vu que les tenseurs sont censes etre adjacents)
 const MxfpBuffer = struct {
     blocks_data: ?[]const u8 = null,
     scales_data: ?[]const u8 = null,
@@ -92,11 +95,11 @@ fn dequantizeMxfp4(allocator: std.mem.Allocator, tensor_buffer: MxfpBuffer, outp
                 const block = blocks_buf[block_offset..][0..blk_size];
 
                 var byte_idx: usize = 0;
-                std.debug.assert(blk_size % 4 == 0); // Sinon faut traiter la tail sans vec
-                while (byte_idx + 4 <= blk_size) : (byte_idx += 4) {
-                    // Charger 4 bytes = 8 valeurs fp4
-                    var fp4_values: @Vector(VEC_SIZE, u4) = undefined; // ex: vecsize = 8 donc 8x4=32
-                    inline for (0..4) |i| {
+                std.debug.assert(blk_size % VEC_SIZE_FP4 == 0); // Sinon faut traiter la tail sans vec
+                while (byte_idx + VEC_SIZE_FP4 <= blk_size) : (byte_idx += VEC_SIZE_FP4) {
+                    // Charger VEC_SIZE/2 bytes = VEC_SIZE valeurs fp4
+                    var fp4_values: @Vector(VEC_SIZE, u4) = undefined;
+                    inline for (0..VEC_SIZE_FP4) |i| {
                         const byte = block[byte_idx + i];
 
                         const fp4_low: u4 = @intCast(byte & 0xF);
@@ -131,7 +134,7 @@ fn dequantizeMxfp4(allocator: std.mem.Allocator, tensor_buffer: MxfpBuffer, outp
     }
 }
 
-/// Litteralement le meme principe que pour parse le header avec les pair
+/// Litteralement le meme principe que pour parse le header avec les paires
 /// Si on fait exactement la meme chose que ce qu'on a fait avec le header, on devrait avoir le meme resultat
 pub fn processTensors(
     allocator: std.mem.Allocator,

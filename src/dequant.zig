@@ -92,19 +92,15 @@ pub const Reader = struct {
     }
 
     pub fn deinit(r: *Reader) void {
-        r.allocator.free(r.output_buff);
-
         r.allocator.free(r.new_header_json_bytes);
         // Le header est dans l'arena
 
-        defer {
-            var iter = r.mxfp_buffers_pair.iterator();
-            while (iter.next()) |entry| {
-                if (entry.value_ptr.blocks_data) |data| r.allocator.free(data);
-                if (entry.value_ptr.scales_data) |data| r.allocator.free(data);
-            }
-            r.mxfp_buffers_pair.deinit();
+        var iter = r.mxfp_buffers_pair.iterator();
+        while (iter.next()) |entry| {
+            if (entry.value_ptr.blocks_data) |data| r.allocator.free(data);
+            if (entry.value_ptr.scales_data) |data| r.allocator.free(data);
         }
+        r.mxfp_buffers_pair.deinit();
     }
 
     fn stream(
@@ -140,6 +136,7 @@ pub const Reader = struct {
 
                 if (r.send_offset == r.new_header_json_bytes.len) {
                     r.incrementState();
+                    r.send_offset = 0;
                 }
 
                 return to_send.len;
@@ -156,15 +153,17 @@ pub const Reader = struct {
                     return to_send.len;
                 }
 
+                r.allocator.free(r.output_buff); // On devrait avoir une autre facon plutot que de alloc a chaque fois
+                r.output_buff = &[_]u8{};
+
                 if (r.tensor_index >= r.old_header.len) {
                     r.incrementState();
                     return 0;
                 }
 
-                r.allocator.free(r.output_buff); // pas optimal de alloc a chaque fois
-                r.output_buff = &[_]u8{};
-
                 const tensor = r.old_header[r.tensor_index];
+                r.tensor_index += 1;
+
                 if (tensor.is_mxfp4_blocks or tensor.is_mxfp4_scales) {
                     // handle mxfp4 tensor
                     std.debug.print("Dequantizing MXFP4 pair: {s}\n", .{tensor.base_name});
@@ -182,6 +181,7 @@ pub const Reader = struct {
                         return error.ReadFailed;
                     };
 
+                    r.output_buffer_valid = tensor.size();
                     r.send_offset = 0;
                 }
 
@@ -218,14 +218,13 @@ pub const Reader = struct {
             const blocks = entry.value_ptr.blocks_data.?;
             const scales = entry.value_ptr.scales_data.?;
 
-            const ret = try r.dequantizeMxfp4(entry.value_ptr.*);
+            try r.dequantizeMxfp4(entry.value_ptr.*);
 
             r.allocator.free(blocks);
             r.allocator.free(scales);
             _ = r.mxfp_buffers_pair.remove(tensor.base_name);
-
-            return ret;
         }
+        // If incomplete, do nothing (on attend l'autre paire)
     }
 
     fn dequantizeMxfp4(r: *Reader, tensor_buffer: MxfpBuffer) !void {
@@ -245,7 +244,7 @@ pub const Reader = struct {
 
         const siz = n_experts * out_features * in_features * 2;
         r.output_buff = try r.allocator.alloc(u8, siz);
-        const buff: []align(1) u16 = std.mem.bytesAsSlice(u16, r.output_buff[0..siz]);
+        const buff: []align(1) u16 = std.mem.bytesAsSlice(u16, r.output_buff[0..siz]); // hack
 
         for (0..n_experts) |expert_idx| {
             const scales_offset = expert_idx * out_features * n_blocks;
@@ -300,9 +299,9 @@ pub const Reader = struct {
                     }
                 }
             }
-
-            r.output_buffer_valid = siz;
-            r.send_offset = 0;
         }
+
+        r.output_buffer_valid = siz;
+        r.send_offset = 0;
     }
 };

@@ -36,6 +36,7 @@ pub const Reader = struct {
     // Everything tensor related
     mxfp_buffers_pair: std.StringHashMap(MxfpBuffer),
     output_buff: []u8,
+    output_buffer_valid: usize = 0,
     tensor_index: usize = 0,
 
     send_state: SendState = .header_length,
@@ -145,13 +146,13 @@ pub const Reader = struct {
             },
 
             .tensor_dequant => {
-                if (r.send_offset < r.output_buff.len) {
-                    const remaining = r.output_buff[r.send_offset..];
+                if (r.send_offset < r.output_buffer_valid) {
+                    const remaining = r.output_buff[r.send_offset..r.output_buffer_valid];
                     const to_send = limit.slice(remaining);
 
                     try w.writeAll(to_send);
-                    r.send_offset += to_send.len;
 
+                    r.send_offset += to_send.len;
                     return to_send.len;
                 }
 
@@ -168,16 +169,18 @@ pub const Reader = struct {
                     // handle mxfp4 tensor
                     std.debug.print("Dequantizing MXFP4 pair: {s}\n", .{tensor.base_name});
                     r.processTensor(tensor) catch {
-                        return error.EndOfStream; // pas optimal aussi, il faudrait une meilleure gestion d'erreur
+                        return error.ReadFailed;
                     };
                 } else {
                     // Handle regular tensor (copy)
                     std.debug.print("Copying regular tensor: {s}\n", .{tensor.base_name});
                     r.output_buff = r.allocator.alloc(u8, tensor.size()) catch {
-                        return error.EndOfStream; // pas optimal aussi, il faudrait une meilleure gestion d'erreur
+                        return error.ReadFailed;
                     };
 
-                    try r.input_reader.readSliceAll(r.output_buff[0..tensor.size()]);
+                    r.input_reader.readSliceAll(r.output_buff[0..tensor.size()]) catch {
+                        return error.ReadFailed;
+                    };
 
                     r.send_offset = 0;
                 }
@@ -242,6 +245,7 @@ pub const Reader = struct {
 
         const siz = n_experts * out_features * in_features * 2;
         r.output_buff = try r.allocator.alloc(u8, siz);
+        const buff: []align(1) u16 = std.mem.bytesAsSlice(u16, r.output_buff[0..siz]);
 
         for (0..n_experts) |expert_idx| {
             const scales_offset = expert_idx * out_features * n_blocks;
@@ -291,7 +295,7 @@ pub const Reader = struct {
                             const bf16_value = mxfp4.floatToBF16(scaled_vec[i]); // Pareil que au dessus
 
                             const in_idx = block_idx * blk_size * 2 + byte_idx * 2 + i;
-                            r.output_buff[in_idx * out_features + out_idx] = bf16_value;
+                            buff[in_idx * out_features + out_idx] = bf16_value;
                         }
                     }
                 }

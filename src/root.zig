@@ -17,16 +17,15 @@ fn writeHeaderToFile(allocator: std.mem.Allocator, header: *json.ObjectMap, tens
 }
 // TEMP FUNC
 
-pub fn dequant_safetensors(allocator: std.mem.Allocator, tensor_reader: *std.Io.Reader, tensor_writer: *std.Io.Writer) !void {
-    var header_arena = std.heap.ArenaAllocator.init(allocator);
-    const arena = header_arena.allocator();
+pub fn dequant_safetensors(allocator: std.mem.Allocator, tensor_reader: *std.Io.Reader, buffer: []u8) !dequant.Reader {
+    // var header_arena = std.heap.ArenaAllocator.init(allocator);
+    // const arena = header_arena.allocator();
 
-    const new_header = try safetensors.parseHeader(arena, tensor_reader);
-    try writeHeaderToFile(arena, new_header.new_json, tensor_writer);
-    try mxfp4.processTensors(allocator, new_header.old_header, tensor_reader, tensor_writer);
+    // const new_header = try safetensors.parseHeader(arena, tensor_reader);
+    // try writeHeaderToFile(arena, new_header.new_json, tensor_writer);
+    // try mxfp4.processTensors(allocator, new_header.old_header, tensor_reader, tensor_writer);
 
-    header_arena.deinit();
+    // header_arena.deinit();
 
-    const reader: dequant.Reader = undefined;
-    _ = reader;
+    return dequant.Reader.init(allocator, tensor_reader, buffer);
 }

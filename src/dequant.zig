@@ -3,23 +3,43 @@ const std = @import("std");
 pub const Reader = struct {
     interface: std.Io.Reader,
 
-    pub fn initInterface() std.Io.Reader {
+    input_reader: *std.Io.Reader,
+    allocator: std.mem.Allocator,
+
+    pub fn initInterface(buffer: []u8) std.Io.Reader {
         return .{
             .vtable = &.{
-                // .stream = Reader.stream,
-                // .discard = Reader.discard,
-                // .readVec = Reader.readVec,
+                .stream = Reader.stream,
             },
+            .buffer = buffer,
+            .seek = 0,
+            .end = 0,
         };
     }
 
-    pub fn init() Reader {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        input_reader: *std.Io.Reader,
+        buffer: []u8,
+    ) Reader {
         return .{
-            .interface = initInterface(),
+            .allocator = allocator,
+            .input_reader = input_reader,
+            .interface = initInterface(buffer),
         };
+    }
+
+    pub fn deinit(_: *Reader) void {}
+
+    fn stream(
+        io_reader: *std.Io.Reader,
+        w: *std.Io.Writer,
+        limit: std.Io.Limit,
+    ) std.Io.Reader.StreamError!usize {
+        _ = io_reader;
+        _ = w;
+        _ = limit;
+
+        return 0;
     }
 };
-
-pub fn reader() Reader {
-    return .init();
-}

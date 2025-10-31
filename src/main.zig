@@ -28,7 +28,18 @@ pub fn main() !void {
     var file_buffer: [0xFFFF]u8 = undefined;
     var file_writer = output_file.writer(&file_buffer);
 
-    try mxfp4Loader.dequant_safetensors(allocator, &safetensors_reader.interface, &file_writer.interface);
+    var dequant_buffer: [8192]u8 = undefined;
+    var dequant_reader = try mxfp4Loader.dequant_safetensors(
+        allocator,
+        &safetensors_reader.interface,
+        &dequant_buffer,
+    );
+    defer dequant_reader.deinit();
+
+    // Stream from dequant reader to output writer
+    _ = try dequant_reader.interface.streamRemaining(&file_writer.interface);
+
+    // try mxfp4Loader.dequant_safetensors(allocator, &safetensors_reader.interface, &file_writer.interface);
 
     try file_writer.interface.flush();
 }

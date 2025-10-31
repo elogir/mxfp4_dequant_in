@@ -17,6 +17,19 @@ pub const Reader = struct {
     header_len_sent: bool = false, // tracking header len sent
     header_bytes_pos: usize = 0, // tracking header bytes sent
 
+    send_state: SendState = .header_length,
+    send_offset: usize = 0,
+
+    const SendState = enum {
+        header_length,
+        header_content,
+        finished,
+    };
+
+    inline fn incrementEnum(r: *Reader) void {
+        r.send_state = @enumFromInt(@intFromEnum(r.send_state) + 1);
+    }
+
     pub fn initInterface(buffer: []u8) std.Io.Reader {
         return .{
             .vtable = &.{
@@ -65,33 +78,40 @@ pub const Reader = struct {
     ) std.Io.Reader.StreamError!usize {
         const r: *Reader = @alignCast(@fieldParentPtr("interface", io_reader));
 
-        // Etape 1 : la len des headers
-        if (!r.header_len_sent) {
-            var len_bytes: [8]u8 = undefined;
-            std.mem.writeInt(u64, &len_bytes, r.new_header_len, .little);
+        switch (r.send_state) {
+            .header_length => { // Etape 1 : send la len du nouveau header
+                var len_bytes: [8]u8 = undefined;
+                std.mem.writeInt(u64, &len_bytes, r.new_header_len, .little);
 
-            const to_send = limit.slice(&len_bytes);
+                const remaining = len_bytes[r.send_offset..];
+                const to_send = limit.slice(remaining);
+                try w.writeAll(to_send);
+                r.send_offset += to_send.len;
 
-            try w.writeAll(to_send);
+                if (r.send_offset == 8) {
+                    incrementEnum(r);
+                    r.send_offset = 0;
+                }
 
-            if (to_send.len == 8) {
-                r.header_len_sent = true;
-            }
+                return to_send.len;
+            },
 
-            return to_send.len;
+            .header_content => { // Etape 2 : le nouveau header
+                const remaining = r.new_header_json_bytes[r.send_offset..];
+                const to_send = limit.slice(remaining);
+                try w.writeAll(to_send);
+                r.send_offset += to_send.len;
+
+                if (r.send_offset == r.new_header_json_bytes.len) {
+                    incrementEnum(r);
+                }
+
+                return to_send.len;
+            },
+
+            .finished => {
+                return error.EndOfStream;
+            },
         }
-
-        // Etape 2 : le nouveau header
-        if (r.header_bytes_pos < r.new_header_json_bytes.len) {
-            const remaining = r.new_header_json_bytes[r.header_bytes_pos..];
-
-            const to_send = limit.slice(remaining);
-            try w.writeAll(to_send);
-            r.header_bytes_pos += to_send.len;
-
-            return to_send.len;
-        }
-
-        return std.Io.Reader.StreamError.EndOfStream;
     }
 };

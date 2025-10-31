@@ -3,6 +3,21 @@ const safetensors = @import("safetensors.zig");
 const mxfp4 = @import("mxfp4.zig");
 const json = std.json;
 
+const VEC_SIZE = 16;
+const VEC_SIZE_FP4 = VEC_SIZE / 2;
+
+/// Quasi la meme que TensorInfo mais avec la data
+/// (normalement free quasi juste apres vu que les tenseurs sont censes etre adjacents)
+const MxfpBuffer = struct {
+    blocks_data: ?[]const u8 = null,
+    scales_data: ?[]const u8 = null,
+    blocks_info: ?safetensors.TensorInfo = null,
+
+    fn isComplete(self: MxfpBuffer) bool {
+        return self.blocks_data != null and self.scales_data != null;
+    }
+};
+
 pub const Reader = struct {
     interface: std.Io.Reader,
 
@@ -19,7 +34,7 @@ pub const Reader = struct {
     header_bytes_pos: usize = 0, // tracking header bytes sent
 
     // Everything tensor related
-    mxfp_buffers_pair: std.StringHashMap(mxfp4.MxfpBuffer),
+    mxfp_buffers_pair: std.StringHashMap(MxfpBuffer),
     output_buff: []u8,
     tensor_index: usize = 0,
 
@@ -69,7 +84,7 @@ pub const Reader = struct {
             .new_header = header_result.new_header,
             .new_header_json_bytes = new_header_json_bytes,
             .new_header_len = @intCast(new_header_json_bytes.len),
-            .mxfp_buffers_pair = std.StringHashMap(mxfp4.MxfpBuffer).init(allocator),
+            .mxfp_buffers_pair = std.StringHashMap(MxfpBuffer).init(allocator),
             .output_buff = &[_]u8{},
             .interface = initInterface(buffer),
         };
@@ -170,6 +185,115 @@ pub const Reader = struct {
             .finished => {
                 return error.EndOfStream;
             },
+        }
+    }
+
+    /// Litteralement le meme principe que pour parse le header avec les paires
+    /// Si on fait exactement la meme chose que ce qu'on a fait avec le header, on devrait avoir le meme resultat
+    fn processTensor(r: *Reader, tensor: safetensors.TensorInfo) !void {
+        const tensor_data = try r.allocator.alloc(u8, tensor.size());
+        errdefer r.allocator.free(tensor_data);
+
+        try r.input_reader.readSliceAll(tensor_data); // On lit le tenseur en entier (normalement la taille dedvrait aller dans la ram?)
+
+        const entry = try r.mxfp_buffers_pair.getOrPut(tensor.base_name);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = MxfpBuffer{};
+        }
+
+        if (tensor.is_mxfp4_blocks) {
+            entry.value_ptr.blocks_data = tensor_data;
+            entry.value_ptr.blocks_info = tensor;
+        } else {
+            entry.value_ptr.scales_data = tensor_data;
+        }
+
+        if (entry.value_ptr.isComplete()) {
+            const blocks = entry.value_ptr.blocks_data.?;
+            const scales = entry.value_ptr.scales_data.?;
+
+            const ret = try dequantizeMxfp4(r.allocator, entry.value_ptr.*);
+
+            r.allocator.free(blocks);
+            r.allocator.free(scales);
+            _ = r.mxfp_buffers_pair.remove(tensor.base_name);
+
+            return ret;
+        }
+    }
+
+    fn dequantizeMxfp4(r: *Reader, tensor_buffer: MxfpBuffer) !void {
+        const blocks_info = tensor_buffer.blocks_info.?;
+        const blocks_data = tensor_buffer.blocks_data.?;
+        const scales_data = tensor_buffer.scales_data.?;
+
+        const n_experts = blocks_info.shape[0];
+        const out_features = blocks_info.shape[1];
+        const n_blocks = blocks_info.shape[2];
+        const blk_size = blocks_info.shape[3];
+        const in_features = n_blocks * blk_size * 2;
+
+        // Buffer pour un expert a la fois
+        const expert_buffer_a_volonte = try r.allocator.alloc(u16, in_features * out_features);
+        defer r.allocator.free(expert_buffer_a_volonte);
+
+        for (0..n_experts) |expert_idx| {
+            const scales_offset = expert_idx * out_features * n_blocks;
+            const blocks_offset = expert_idx * out_features * n_blocks * blk_size;
+
+            const scales_buf = scales_data[scales_offset..][0 .. out_features * n_blocks];
+            const blocks_buf = blocks_data[blocks_offset..][0 .. out_features * n_blocks * blk_size];
+
+            for (0..out_features) |out_idx| {
+                for (0..n_blocks) |block_idx| {
+                    // Get scale
+                    const scale_offset = out_idx * n_blocks + block_idx;
+                    const scale_byte = scales_buf[scale_offset];
+                    const scale = mxfp4.e8m0ToFloat(scale_byte);
+                    const scale_vec: @Vector(VEC_SIZE, f32) = @splat(scale);
+
+                    // Get block data
+                    const block_offset = out_idx * n_blocks * blk_size + block_idx * blk_size;
+                    const block = blocks_buf[block_offset..][0..blk_size];
+
+                    var byte_idx: usize = 0;
+                    std.debug.assert(blk_size % VEC_SIZE_FP4 == 0); // Sinon faut traiter la tail sans vec
+                    while (byte_idx + VEC_SIZE_FP4 <= blk_size) : (byte_idx += VEC_SIZE_FP4) {
+                        // Charger VEC_SIZE/2 bytes = VEC_SIZE valeurs fp4
+                        var fp4_values: @Vector(VEC_SIZE, u4) = undefined;
+                        inline for (0..VEC_SIZE_FP4) |i| {
+                            const byte = block[byte_idx + i];
+
+                            const fp4_low: u4 = @intCast(byte & 0xF);
+                            const fp4_high: u4 = @intCast((byte >> 4) & 0xF);
+
+                            fp4_values[i * 2] = fp4_low;
+                            fp4_values[i * 2 + 1] = fp4_high;
+                        }
+
+                        // Convertir les 8 fp4 en f32 (@shuffle? mais on a pas de values au comptime?)
+                        var fp4_floats: @Vector(VEC_SIZE, f32) = undefined;
+                        inline for (0..VEC_SIZE) |i| {
+                            fp4_floats[i] = mxfp4.fp4ToFloat(fp4_values[i]); // Je suppose que vu que la func est inline ca va juste charger directement?
+                        }
+
+                        // Appliquer le scale vectorised
+                        const scaled_vec = fp4_floats * scale_vec;
+
+                        // Conversion bf16
+                        inline for (0..VEC_SIZE) |i| {
+                            const bf16_value = mxfp4.floatToBF16(scaled_vec[i]); // Pareil que au dessus
+
+                            const in_idx = block_idx * blk_size * 2 + byte_idx * 2 + i;
+                            expert_buffer_a_volonte[in_idx * out_features + out_idx] = bf16_value;
+                        }
+                    }
+                }
+            }
+
+            // OLD CODE
+            // const output_bytes: []u8 = std.mem.sliceAsBytes(expert_buffer_a_volonte);
+            // try output_writer.writeAll(output_bytes);
         }
     }
 };

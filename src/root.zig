@@ -7,6 +7,7 @@ const dequant = @import("dequant.zig");
 // TEMP FUNC
 fn writeHeaderToFile(allocator: std.mem.Allocator, header: *json.ObjectMap, tensor_writer: *std.Io.Writer) !void {
     const json_bytes = try json.Stringify.valueAlloc(allocator, json.Value{ .object = header.* }, .{ .whitespace = .minified });
+    defer allocator.free(json_bytes);
     const header_size: u64 = json_bytes.len;
 
     try tensor_writer.writeInt(u64, header_size, .little);

@@ -85,7 +85,7 @@ pub const Reader = struct {
             .new_header_json_bytes = new_header_json_bytes,
             .new_header_len = @intCast(new_header_json_bytes.len),
             .mxfp_buffers_pair = std.StringHashMap(MxfpBuffer).init(allocator),
-            .output_buff = &[_]u8{},
+            .output_buff = &[0]u8{},
             .interface = initInterface(buffer),
         };
     }
@@ -152,8 +152,11 @@ pub const Reader = struct {
                     return to_send.len;
                 }
 
-                r.allocator.free(r.output_buff); // On devrait avoir une autre facon plutot que de alloc a chaque fois
-                r.output_buff = &[_]u8{};
+                // On devrait avoir une autre facon plutot que de alloc a chaque fois
+                if (r.output_buff.len > 0) {
+                    r.allocator.free(r.output_buff);
+                    r.output_buff = &[0]u8{};
+                }
 
                 if (r.tensor_index >= r.old_header.len) {
                     r.incrementState();
